@@ -1,0 +1,27 @@
+# OpenSSL config for the OFFLINE root CA of e-Sign SDIT Bahtera Nuh.
+# Used only on the offline machine. See root-ca-offline.md.
+# The Organization (O) must equal SIGNER_ORG_NAME on the server.
+
+[ req ]
+distinguished_name = root_dn
+prompt             = no
+x509_extensions    = v3_root
+default_md         = sha384
+
+[ root_dn ]
+C  = ID
+O  = SDIT Bahtera Nuh
+CN = SDIT Bahtera Nuh Root CA
+
+# Self-signed root: may sign exactly one level of CA below it (the online intermediate).
+[ v3_root ]
+basicConstraints     = critical, CA:TRUE, pathlen:1
+keyUsage             = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+
+# The online intermediate (key inside the server HSM). It may only sign end-entity certificates.
+[ v3_intermediate ]
+basicConstraints       = critical, CA:TRUE, pathlen:0
+keyUsage               = critical, keyCertSign, cRLSign
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always

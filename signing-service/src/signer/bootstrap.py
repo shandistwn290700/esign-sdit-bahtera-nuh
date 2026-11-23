@@ -1,6 +1,6 @@
 """Development CA bootstrap.
 
-Production uses an offline root (see docs/runbooks, to be written): the root key never touches
+Production uses an offline root (docs/runbooks/root-ca-offline.md): the root key never touches
 the server. This module creates a throwaway software root for local development and tests.
 """
 
