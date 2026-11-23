@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM python:3.12-slim-bookworm AS base
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=60 PIP_RETRIES=10
 RUN apt-get update \
  && apt-get install -y --no-install-recommends softhsm2 tini ca-certificates \
  && rm -rf /var/lib/apt/lists/*

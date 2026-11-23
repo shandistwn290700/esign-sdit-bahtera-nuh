@@ -56,7 +56,10 @@ Service lain **tidak** diberi domain.
 ## 4. Deploy pertama
 
 1. Klik **Deploy**. Build pertama memakan waktu sekitar 5–10 menit.
-2. Tunggu sampai semua service berstatus *healthy*. `web` otomatis menjalankan migrasi database.
+2. Tunggu sampai service berstatus *healthy*. `web` otomatis menjalankan migrasi database.
+   **`signer` akan tetap *unhealthy* sampai CA dipasang di langkah 3.** Itu memang disengaja:
+   sebelum ada CA, Signing Service menolak bekerja dan aplikasi menampilkan pesan gangguan saat
+   tanda tangan diaktifkan.
 3. Siapkan CA tanda tangan mengikuti [root-ca-offline.md](root-ca-offline.md), langkah 1–5.
 4. Buat akun admin pertama di terminal service `web` (Coolify → web → *Terminal*):
    ```sh

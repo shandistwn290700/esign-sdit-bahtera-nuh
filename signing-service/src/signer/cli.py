@@ -76,9 +76,11 @@ def main(argv: list[str] | None = None) -> int:
                 sys.stdout.write(pem)
             return 0
 
-        fingerprints = import_ca_certificates(
-            svc, args.root.read_bytes(), args.intermediate.read_bytes()
-        )
+        try:
+            root_pem, intermediate_pem = args.root.read_bytes(), args.intermediate.read_bytes()
+        except OSError as exc:
+            raise CaSetupError(f"Berkas tidak bisa dibaca: {exc.filename}") from exc
+        fingerprints = import_ca_certificates(svc, root_pem, intermediate_pem)
         print("CA terpasang. Cocokkan sidik jari ini dengan catatan di mesin offline:")
         print(f"  Root          SHA-256 {fingerprints['root_sha256']}")
         print(f"  CA perantara  SHA-256 {fingerprints['intermediate_sha256']}")

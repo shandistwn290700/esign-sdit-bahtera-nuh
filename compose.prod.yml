@@ -66,7 +66,9 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-      signer: { condition: service_healthy }
+      # Not service_healthy: the signer reports 503 until the offline-root CA is installed
+      # (runbook step after the first deploy). The app shows a clear error for signing until then.
+      signer: { condition: service_started }
 
   worker:
     <<: *laravel

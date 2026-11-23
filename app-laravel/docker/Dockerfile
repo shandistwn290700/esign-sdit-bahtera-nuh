@@ -11,6 +11,8 @@ COPY --from=node:24-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/nod
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
 
 WORKDIR /var/www/html
+# Fewer parallel downloads: many concurrent HTTP/2 streams to GitHub get cut on flaky links.
+ENV COMPOSER_MAX_PARALLEL_HTTP=4
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-scripts --no-autoloader --no-interaction --prefer-dist
 
@@ -18,16 +20,23 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY . .
-# APP_ENV=build: boots artisan for Wayfinder route generation without the production guards
-# (https VERIFY_BASE_URL, secure cookies) that need real deployment settings.
+# APP_ENV=build (this stage only): artisan boots for package discovery and Wayfinder route
+# generation without the production guards (https VERIFY_BASE_URL, secure cookies) that need
+# real deployment settings. The runtime stage does not inherit it.
+ENV APP_ENV=build \
+    APP_KEY=base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 RUN composer dump-autoload --optimize --no-dev --classmap-authoritative \
- && APP_ENV=build APP_KEY=base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= npm run build \
+ && npm run build \
  && rm -rf node_modules bootstrap/cache/*.php storage/framework/views/*.php
 
 # --- runtime ------------------------------------------------------------------------------------
 FROM ${PHP_IMAGE}
 USER root
 RUN install-php-extensions intl bcmath
+# The app (SecurityHeaders middleware) sends these headers itself, stricter (X-Frame-Options DENY
+# plus CSP). Nginx's copies would duplicate them, and two different X-Frame-Options values make
+# browsers ignore the header. The dotfile / sensitive-file deny rules in the same file are kept.
+RUN sed -i '/^add_header /d' /etc/nginx/server-opts.d/security.conf
 ENV PHP_OPCACHE_ENABLE=1 \
     LOG_CHANNEL=stderr \
     AUTORUN_ENABLED=false
