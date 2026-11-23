@@ -20,6 +20,13 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->encryptCookies(except: ['appearance', 'sidebar_state']);
 
+        // Behind Coolify's proxy (TLS ends there): trust it so https URLs, secure cookies, HSTS and
+        // client IPs (rate limits, audit log) are correct. Unset in development. Only safe when the
+        // app port is reachable through that proxy alone (compose.prod.yml publishes no ports).
+        if (is_string($proxies = env('TRUSTED_PROXIES')) && $proxies !== '') {
+            $middleware->trustProxies(at: $proxies === '*' ? '*' : array_map('trim', explode(',', $proxies)));
+        }
+
         $middleware->web(append: [
             SecurityHeaders::class,
             HandleAppearance::class,

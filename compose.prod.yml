@@ -1,0 +1,171 @@
+# Production stack for Coolify (ADR-0009). See docs/runbooks/deploy-coolify.md.
+#
+# - Only `web` gets a domain in Coolify (port 8080). Nothing publishes a host port.
+# - `signer` has no domain: Laravel reaches it as http://signer:8000 on the private network.
+# - Secrets come from Coolify environment variables; `${VAR:?}` makes a missing one fail loudly.
+
+x-laravel: &laravel
+  build:
+    context: ./app-laravel
+    dockerfile: docker/Dockerfile
+  restart: unless-stopped
+  networks: [esign]
+  volumes:
+    - app-storage:/var/www/html/storage/app
+  environment: &laravel-env
+    APP_NAME: "e-Sign SDIT Bahtera Nuh"
+    APP_ENV: production
+    APP_DEBUG: "false"
+    APP_KEY: ${APP_KEY:?set APP_KEY (php artisan key:generate --show)}
+    APP_URL: ${APP_URL:?set APP_URL, e.g. https://esign.sditbahteranuh.sch.id}
+    APP_TIMEZONE: Asia/Jakarta
+    APP_LOCALE: id
+    APP_FALLBACK_LOCALE: en
+    LOG_CHANNEL: stderr
+    LOG_LEVEL: ${LOG_LEVEL:-warning}
+    # Coolify's proxy terminates TLS in front of `web`; no host port exists, so trusting it is safe.
+    TRUSTED_PROXIES: "*"
+    DB_CONNECTION: pgsql
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    DB_DATABASE: esign
+    DB_USERNAME: esign
+    DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+    SESSION_DRIVER: database
+    SESSION_ENCRYPT: "true"
+    SESSION_SECURE_COOKIE: "true"
+    SESSION_LIFETIME: "120"
+    QUEUE_CONNECTION: redis
+    CACHE_STORE: redis
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    MAIL_MAILER: smtp
+    MAIL_HOST: ${MAIL_HOST:?set MAIL_HOST}
+    MAIL_PORT: ${MAIL_PORT:-587}
+    MAIL_USERNAME: ${MAIL_USERNAME:?set MAIL_USERNAME}
+    MAIL_PASSWORD: ${MAIL_PASSWORD:?set MAIL_PASSWORD}
+    MAIL_SCHEME: ${MAIL_SCHEME:-smtp}
+    MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?set MAIL_FROM_ADDRESS}
+    MAIL_FROM_NAME: "e-Sign SDIT Bahtera Nuh"
+    SIGNER_URL: http://signer:8000
+    SIGNER_TOKEN: ${SIGNER_API_TOKEN:?set SIGNER_API_TOKEN (48+ random characters)}
+    SIGNER_SIGN_LOCATION: ${SIGNER_SIGN_LOCATION:-}
+    VERIFY_BASE_URL: ${APP_URL}/v
+    DOCUMENT_ENCRYPTION_KEY: ${DOCUMENT_ENCRYPTION_KEY:?set DOCUMENT_ENCRYPTION_KEY (base64:32 bytes); back it up offline}
+    AUDIT_ARCHIVE_EMAIL: ${AUDIT_ARCHIVE_EMAIL:-}
+
+services:
+  web:
+    <<: *laravel
+    environment:
+      <<: *laravel-env
+      # Only the web container migrates and caches config/routes/views at start.
+      AUTORUN_ENABLED: "true"
+      AUTORUN_LARAVEL_MIGRATION: "true"
+      AUTORUN_LARAVEL_STORAGE_LINK: "false"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      signer: { condition: service_healthy }
+
+  worker:
+    <<: *laravel
+    command: ["php", "/var/www/html/artisan", "queue:work", "--tries=3", "--max-time=3600"]
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "healthcheck-queue"]
+      start_period: 15s
+    depends_on:
+      web: { condition: service_healthy }
+
+  scheduler:
+    <<: *laravel
+    command: ["php", "/var/www/html/artisan", "schedule:work"]
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "healthcheck-schedule"]
+      start_period: 15s
+    depends_on:
+      web: { condition: service_healthy }
+
+  signer:
+    build:
+      context: ./signing-service
+      target: runtime
+    restart: unless-stopped
+    networks: [esign]
+    volumes:
+      - signer-data:/data
+    environment:
+      SIGNER_APP_ENV: production
+      SIGNER_API_TOKENS: ${SIGNER_API_TOKEN:?set SIGNER_API_TOKEN}
+      SIGNER_HSM_TOKEN_LABEL: tte
+      SIGNER_HSM_PIN: ${SIGNER_HSM_PIN:?set SIGNER_HSM_PIN}
+      SIGNER_HSM_SO_PIN: ${SIGNER_HSM_SO_PIN:?set SIGNER_HSM_SO_PIN}
+      SIGNER_TOTP_ENCRYPTION_KEY: ${SIGNER_TOTP_ENCRYPTION_KEY:?set SIGNER_TOTP_ENCRYPTION_KEY (base64 of 32 bytes)}
+      SIGNER_TSA_URL: ${SIGNER_TSA_URL:-http://timestamp.digicert.com}
+      SIGNER_CRL_PUBLIC_URL: ${APP_URL}/pki/crl
+      # Must equal O= in docs/runbooks/root-ca.cnf. Fixed when the CA is created.
+      SIGNER_ORG_NAME: SDIT Bahtera Nuh
+      SIGNER_COUNTRY: ID
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    networks: [esign]
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: esign
+      POSTGRES_USER: esign
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U esign -d esign"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    networks: [esign]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backup:
+    build: ./ops/backup
+    restart: unless-stopped
+    networks: [esign]
+    volumes:
+      - app-storage:/source/storage:ro
+      - signer-data:/source/signer:ro
+      - backups:/backups
+    environment:
+      TZ: Asia/Jakarta
+      BACKUP_CRON: ${BACKUP_CRON:-0 2 * * *}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      # age PUBLIC key; the private key stays offline (docs/runbooks/backup-restore.md).
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:?set BACKUP_AGE_RECIPIENT (age public key)}
+      BACKUP_RCLONE_REMOTE: ${BACKUP_RCLONE_REMOTE:-}
+      PGHOST: postgres
+      PGUSER: esign
+      PGPASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+      PGDATABASE: esign
+    depends_on:
+      postgres: { condition: service_healthy }
+
+networks:
+  esign: {}
+
+volumes:
+  app-storage:
+  signer-data:
+  pg-data:
+  redis-data:
+  backups:
