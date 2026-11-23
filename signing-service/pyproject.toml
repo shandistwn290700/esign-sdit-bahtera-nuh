@@ -1,0 +1,59 @@
+[project]
+name = "tte-signer"
+version = "1.0.0"
+description = "Internal signing service for TTE QR (PAdES + SoftHSM2)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi~=0.115.0",
+    "uvicorn[standard]~=0.32.0",
+    "python-multipart~=0.0.12",
+    "pydantic~=2.9",
+    "pydantic-settings~=2.6",
+    "pyHanko[pkcs11,qr]~=0.25.1",
+    "asn1crypto~=1.5",
+    "cryptography>=43,<45",
+    "pyotp~=2.9",
+    "certifi>=2024.8.30",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest~=8.3",
+    "httpx~=0.27",
+    "mypy~=1.13",
+    "ruff~=0.7",
+]
+
+[project.scripts]
+tte-signer = "signer.cli:main"
+
+[build-system]
+requires = ["hatchling~=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/signer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["hsm: requires a real SoftHSM2 token (run inside Docker)"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+# pyHanko/certvalidator ship partial annotations; allow calling their untyped functions.
+untyped_calls_exclude = ["pyhanko", "pyhanko_certvalidator"]
+[[tool.mypy.overrides]]
+module = ["pyhanko.*", "pyhanko_certvalidator.*", "asn1crypto.*", "pkcs11.*", "pyotp.*", "certifi.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "BLE", "RUF"]
+ignore = ["S101"]
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]

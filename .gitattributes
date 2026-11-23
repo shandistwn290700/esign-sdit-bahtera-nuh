@@ -1,0 +1,8 @@
+# Normalise text files; scripts and Docker files must stay LF or containers fail on Windows checkouts.
+* text=auto eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
+*.pdf binary
+*.png binary
+*.woff2 binary

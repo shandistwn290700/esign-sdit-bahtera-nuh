@@ -1,0 +1,746 @@
+openapi: 3.1.0
+info:
+  title: TTE Signing Service (internal)
+  version: 1.0.0
+  description: |
+    Layanan internal untuk operasi kriptografi TTE: kunci penanda tangan, CA internal,
+    penyiapan & penandatanganan PDF (PAdES), validasi, dan CRL.
+
+    **Hanya dapat diakses dari jaringan Docker internal.** Satu-satunya klien adalah
+    Laravel (web + Horizon worker). Lihat docs/architecture.md dan ADR-0001..0003.
+
+    Konvensi:
+    - Semua path diawali `/v1`. Perubahan yang tidak kompatibel → `/v2`.
+    - PDF dikirim sebagai `multipart/form-data` (bagian `file`) dan dikembalikan sebagai
+      `application/pdf` mentah; metadata dikembalikan lewat header `X-*`.
+    - Koordinat dalam **PDF points (1/72 inci)**, origin **kiri-bawah** halaman (PDF user space).
+      Halaman bernomor mulai dari 1.
+    - Waktu dalam RFC 3339 UTC.
+    - Error memakai RFC 9457 `application/problem+json` dengan field `code` yang stabil.
+    - Batas: PDF maks 20 MB, maks 10 signature field per dokumen.
+    - Layanan ini stateless terhadap dokumen: tidak menyimpan PDF apa pun.
+servers:
+  - url: http://signer:8000
+    description: Hostname internal di jaringan Docker Coolify
+security:
+  - internalToken: []
+
+tags:
+  - name: signers
+    description: Kunci, sertifikat, dan TOTP penanda tangan
+  - name: documents
+    description: Penyiapan, penandatanganan, dan validasi PDF
+  - name: pki
+    description: Rantai CA dan CRL
+  - name: system
+    description: Health dan attestation audit log
+
+paths:
+  /v1/signers:
+    post:
+      tags: [signers]
+      operationId: createSigner
+      summary: Buat kunci penanda tangan + terbitkan sertifikat
+      description: |
+        Membuat pasangan kunci ECDSA P-256 non-extractable di SoftHSM, menerbitkan sertifikat
+        dari Intermediate CA (berlaku 2 tahun), dan membuat secret TOTP tanda tangan berstatus
+        `pending`. Laravel menampilkan `otpauth_uri` sebagai QR satu kali ke penanda tangan,
+        lalu memanggil `confirmSignerTotp`. **`otpauth_uri` hanya dikembalikan sekali** —
+        jangan disimpan di database Laravel.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSignerRequest' }
+      responses:
+        '201':
+          description: Signer dibuat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateSignerResponse' }
+        '409':
+          description: "`signer_ref` sudah memiliki kunci aktif (`code: signer_exists`)"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /v1/signers/{key_id}:
+    get:
+      tags: [signers]
+      operationId: getSigner
+      summary: Status kunci, sertifikat, dan TOTP
+      parameters:
+        - $ref: '#/components/parameters/KeyId'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Signer' }
+        '404': { $ref: '#/components/responses/SignerNotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/signers/{key_id}/totp/confirm:
+    post:
+      tags: [signers]
+      operationId: confirmSignerTotp
+      summary: Aktifkan TOTP tanda tangan dengan kode pertama
+      parameters:
+        - $ref: '#/components/parameters/KeyId'
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TotpCode' }
+      responses:
+        '200':
+          description: TOTP aktif
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Signer' }
+        '409':
+          description: "TOTP sudah aktif (`code: totp_already_active`)"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/TotpRejected' }
+        '404': { $ref: '#/components/responses/SignerNotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/signers/{key_id}/totp/reset:
+    post:
+      tags: [signers]
+      operationId: resetSignerTotp
+      summary: Reset TOTP tanda tangan (aksi admin)
+      description: |
+        Mengganti secret TOTP dan mengembalikan status ke `pending`. Laravel wajib memastikan
+        aksi ini dilakukan admin (dengan re-autentikasi) dan mencatatnya di audit log.
+      parameters:
+        - $ref: '#/components/parameters/KeyId'
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actor_ref, reason]
+              properties:
+                actor_ref: { $ref: '#/components/schemas/ActorRef' }
+                reason: { type: string, minLength: 5, maxLength: 500 }
+      responses:
+        '200':
+          description: Secret baru dibuat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TotpEnrollment' }
+        '404': { $ref: '#/components/responses/SignerNotFound' }
+        '409': { $ref: '#/components/responses/SignerRevoked' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/signers/{key_id}/revoke:
+    post:
+      tags: [signers]
+      operationId: revokeSigner
+      summary: Cabut sertifikat penanda tangan
+      description: |
+        Sertifikat masuk CRL berikutnya (CRL diterbitkan ulang segera). Kunci di HSM
+        dinonaktifkan untuk penandatanganan; tanda tangan lama tetap bisa divalidasi dan
+        dilaporkan `revoked` jika waktu tanda tangan setelah `revoked_at`. Idempoten.
+      parameters:
+        - $ref: '#/components/parameters/KeyId'
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, actor_ref]
+              properties:
+                reason:
+                  type: string
+                  description: Alasan pencabutan RFC 5280
+                  enum: [unspecified, key_compromise, affiliation_changed, superseded, cessation_of_operation]
+                note: { type: string, maxLength: 500 }
+                actor_ref: { $ref: '#/components/schemas/ActorRef' }
+      responses:
+        '200':
+          description: Dicabut (atau sudah dicabut sebelumnya)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Signer' }
+        '404': { $ref: '#/components/responses/SignerNotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/documents/prepare:
+    post:
+      tags: [documents]
+      operationId: prepareDocument
+      summary: Buat semua signature field kosong (ADR-0005)
+      description: |
+        Menambahkan signature field kosong untuk setiap penanda tangan sebagai incremental
+        update. Belum ada tanda tangan. Hasilnya disimpan Laravel sebagai versi `prepared`
+        dan menjadi input penanda tangan pertama.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, meta]
+              properties:
+                file:
+                  type: string
+                  contentMediaType: application/pdf
+                  description: PDF asli
+                meta: { $ref: '#/components/schemas/PrepareMeta' }
+            encoding:
+              file: { contentType: application/pdf }
+              meta: { contentType: application/json }
+      responses:
+        '200':
+          description: PDF dengan signature field kosong
+          headers:
+            X-Input-SHA256: { $ref: '#/components/headers/InputSha256' }
+            X-Output-SHA256: { $ref: '#/components/headers/OutputSha256' }
+          content:
+            application/pdf:
+              schema: { type: string, contentMediaType: application/pdf }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '422':
+          description: |
+            PDF tidak dapat diproses. `code`: `pdf_invalid`, `pdf_encrypted`,
+            `pdf_already_signed`, `field_out_of_bounds`, `field_overlap`, `page_not_found`,
+            `input_hash_mismatch`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/documents/sign:
+    post:
+      tags: [documents]
+      operationId: signDocument
+      summary: Isi satu signature field dengan stempel QR + tanda tangan PAdES
+      description: |
+        Urutan pemeriksaan: hash input → status signer → field kosong, urutan benar, dan tidak
+        ada perubahan setelah tanda tangan terakhir → TOTP (kode dikonsumsi di sini) → tanda
+        tangan di HSM → timestamp RFC 3161. Level v1: PAdES B-T (tanpa DSS/LTV).
+
+        **Tidak idempoten dan tidak boleh di-retry otomatis**: kode TOTP sekali pakai,
+        sehingga retry akan ditolak `totp_replayed`. Job Laravel memakai `tries = 1`;
+        jika gagal karena jaringan, minta penanda tangan memasukkan kode baru.
+
+        Keterbatasan yang diketahui: TOTP membuktikan kepemilikan perangkat penanda tangan,
+        tetapi tidak terikat secara kriptografis ke dokumen tertentu. Pengikatan ke dokumen
+        direncanakan di v2 (WebAuthn dengan challenge = hash dokumen).
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, meta]
+              properties:
+                file:
+                  type: string
+                  contentMediaType: application/pdf
+                  description: Versi terakhir dokumen (prepared atau hasil tanda tangan sebelumnya)
+                meta: { $ref: '#/components/schemas/SignMeta' }
+            encoding:
+              file: { contentType: application/pdf }
+              meta: { contentType: application/json }
+      responses:
+        '200':
+          description: PDF bertanda tangan
+          headers:
+            X-Input-SHA256: { $ref: '#/components/headers/InputSha256' }
+            X-Output-SHA256: { $ref: '#/components/headers/OutputSha256' }
+            X-Signed-At:
+              description: Waktu dari token timestamp TSA (RFC 3339)
+              schema: { type: string, format: date-time }
+            X-Certificate-Serial:
+              description: Serial sertifikat penanda tangan (hex)
+              schema: { type: string }
+            X-Timestamp-Authority:
+              description: URL TSA yang dipakai
+              schema: { type: string, format: uri }
+          content:
+            application/pdf:
+              schema: { type: string, contentMediaType: application/pdf }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/SignerNotFound' }
+        '409':
+          description: |
+            Status tidak sesuai. `code`: `signer_revoked`, `signer_totp_pending`,
+            `field_already_signed`, `field_not_found`, `previous_field_unsigned`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '422':
+          description: |
+            `code`: `totp_invalid`, `totp_replayed`, `input_hash_mismatch`, `pdf_invalid`,
+            `pdf_modified_after_signature` (ada perubahan tidak sah setelah tanda tangan terakhir).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/TotpLocked' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /v1/documents/validate:
+    post:
+      tags: [documents]
+      operationId: validateDocument
+      summary: Validasi semua tanda tangan dalam PDF
+      description: |
+        Dipakai halaman verifikasi publik (upload PDF) dan pemeriksaan internal. Tidak
+        menyimpan file. Kepercayaan dievaluasi terhadap Root CA internal; status cabut dari
+        CRL internal. Laravel mencocokkan `document_sha256` dengan database untuk menentukan
+        apakah dokumen terdaftar.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  contentMediaType: application/pdf
+            encoding:
+              file: { contentType: application/pdf }
+      responses:
+        '200':
+          description: Laporan validasi (juga untuk PDF tanpa tanda tangan)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationReport' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '422':
+          description: "`code`: `pdf_invalid`, `pdf_encrypted`"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/pki/chain:
+    get:
+      tags: [pki]
+      operationId: getCaChain
+      summary: Rantai sertifikat (Intermediate + Root) dalam PEM
+      description: Diekspos publik oleh Laravel agar pihak lain dapat mengimpor Root CA.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/pem-certificate-chain:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/pki/crl:
+    get:
+      tags: [pki]
+      operationId: getCrl
+      summary: CRL terbaru dari Intermediate CA (DER)
+      description: |
+        Diterbitkan ulang setiap ada pencabutan dan minimal setiap 24 jam (nextUpdate = 7 hari).
+        Laravel meng-cache dan mengeksposnya publik di URL yang tercantum pada sertifikat
+        (CRL Distribution Point).
+      responses:
+        '200':
+          description: OK
+          headers:
+            X-CRL-Next-Update:
+              schema: { type: string, format: date-time }
+          content:
+            application/pkix-crl:
+              schema: { type: string, contentMediaType: application/pkix-crl }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/attestations/audit-anchor:
+    post:
+      tags: [system]
+      operationId: signAuditAnchor
+      summary: Tandatangani hash terakhir audit log harian (ADR-0004)
+      description: |
+        Ditandatangani dengan kunci sistem `audit` (bukan kunci penanda tangan) dan diberi
+        timestamp. Laravel mengirim hasilnya ke arsip di luar server.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chain_head_sha256, last_entry_id, anchored_date]
+              properties:
+                chain_head_sha256: { $ref: '#/components/schemas/Sha256' }
+                last_entry_id: { type: integer, minimum: 1 }
+                anchored_date: { type: string, format: date }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cms_signature, certificate_serial, signed_at]
+                properties:
+                  cms_signature:
+                    type: string
+                    contentEncoding: base64
+                    description: CMS/PKCS#7 detached signature atas JSON kanonis request (DER, base64)
+                  certificate_serial: { type: string }
+                  signed_at: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /health:
+    get:
+      tags: [system]
+      operationId: health
+      summary: Health check (tanpa autentikasi, tanpa data sensitif)
+      security: []
+      responses:
+        '200':
+          description: Sehat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Ada komponen bermasalah
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+components:
+  securitySchemes:
+    internalToken:
+      type: http
+      scheme: bearer
+      description: |
+        Token acak ≥ 32 byte dari env `SIGNER_API_TOKENS` (dipisah koma; secret Coolify),
+        dibandingkan constant-time. Rotasi: tambahkan token baru, pindahkan Laravel, hapus token lama.
+
+  parameters:
+    KeyId:
+      name: key_id
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/KeyId' }
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: ID korelasi dari Laravel; dicatat di log operasi dan dikembalikan di response.
+      schema: { type: string, maxLength: 64 }
+
+  headers:
+    InputSha256:
+      description: SHA-256 (hex) dari PDF yang diterima
+      schema: { $ref: '#/components/schemas/Sha256' }
+    OutputSha256:
+      description: SHA-256 (hex) dari PDF yang dikembalikan
+      schema: { $ref: '#/components/schemas/Sha256' }
+
+  responses:
+    BadRequest:
+      description: "Request tidak valid (`code: validation_failed`)"
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: "Token tidak ada/salah (`code: unauthorized`)"
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    SignerNotFound:
+      description: "`code: signer_not_found`"
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    SignerRevoked:
+      description: "`code: signer_revoked`"
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TotpRejected:
+      description: "`code: totp_invalid` atau `totp_replayed`"
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TotpLocked:
+      description: |
+        `code: totp_locked` — 5 percobaan gagal dalam 15 menit untuk key_id ini.
+        Header `Retry-After` berisi detik tersisa.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TooLarge:
+      description: "PDF > 20 MB (`code: pdf_too_large`)"
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unavailable:
+      description: "`code`: `hsm_unavailable` atau `tsa_unavailable`. Aman untuk dicoba ulang dengan kode TOTP baru."
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    KeyId:
+      type: string
+      pattern: '^sk_[0-9A-HJKMNP-TV-Z]{26}$'
+      description: "Prefix `sk_` + ULID"
+      examples: ['sk_01JDB8Q3V6X2N4M7P9R0S1T2V3']
+    Sha256:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+    ActorRef:
+      type: string
+      format: uuid
+      description: UUID pengguna Laravel yang melakukan aksi (untuk log operasi)
+
+    CreateSignerRequest:
+      type: object
+      required: [signer_ref, full_name, position, email]
+      additionalProperties: false
+      properties:
+        signer_ref:
+          type: string
+          format: uuid
+          description: UUID pengguna di Laravel
+        full_name: { type: string, minLength: 2, maxLength: 128, description: Masuk ke CN sertifikat }
+        nip:
+          type: [string, 'null']
+          pattern: '^[0-9]{18}$'
+          description: NIP (opsional) — masuk ke serialNumber subject
+        position: { type: string, maxLength: 128, description: Jabatan — masuk ke title subject }
+        organization_unit: { type: [string, 'null'], maxLength: 128 }
+        email: { type: string, format: email }
+        actor_ref: { $ref: '#/components/schemas/ActorRef' }
+
+    CreateSignerResponse:
+      allOf:
+        - $ref: '#/components/schemas/Signer'
+        - type: object
+          required: [totp_enrollment]
+          properties:
+            totp_enrollment: { $ref: '#/components/schemas/TotpEnrollment' }
+
+    TotpEnrollment:
+      type: object
+      required: [otpauth_uri, status]
+      properties:
+        otpauth_uri:
+          type: string
+          description: "`otpauth://totp/...` — tampilkan sekali sebagai QR, jangan disimpan"
+        status: { type: string, const: pending }
+
+    Signer:
+      type: object
+      required: [key_id, signer_ref, status, totp_status, certificate]
+      properties:
+        key_id: { $ref: '#/components/schemas/KeyId' }
+        signer_ref: { type: string, format: uuid }
+        status: { type: string, enum: [active, revoked, expired] }
+        totp_status: { type: string, enum: [pending, active] }
+        revoked_at: { type: [string, 'null'], format: date-time }
+        revocation_reason: { type: [string, 'null'] }
+        certificate:
+          type: object
+          required: [serial, subject, not_before, not_after, pem, sha256_fingerprint]
+          properties:
+            serial: { type: string, description: hex }
+            subject: { type: string }
+            not_before: { type: string, format: date-time }
+            not_after: { type: string, format: date-time }
+            pem: { type: string }
+            sha256_fingerprint: { $ref: '#/components/schemas/Sha256' }
+
+    TotpCode:
+      type: object
+      required: [totp_code]
+      additionalProperties: false
+      properties:
+        totp_code: { type: string, pattern: '^[0-9]{6}$' }
+
+    FieldPlacement:
+      type: object
+      required: [name, order, page, x, y, width, height]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: '^sig_[0-9]{1,2}$'
+          description: "Nama field, sesuai urutan: `sig_1`, `sig_2`, ..."
+        order: { type: integer, minimum: 1, maximum: 10 }
+        page: { type: integer, minimum: 1 }
+        x: { type: number, minimum: 0, description: Kiri-bawah kotak, PDF points }
+        y: { type: number, minimum: 0 }
+        width: { type: number, minimum: 72, maximum: 400, description: Min 1 inci agar QR terbaca }
+        height: { type: number, minimum: 72, maximum: 400 }
+
+    PrepareMeta:
+      type: object
+      required: [input_sha256, fields]
+      additionalProperties: false
+      properties:
+        input_sha256:
+          $ref: '#/components/schemas/Sha256'
+          description: Hash PDF menurut Laravel; ditolak jika tidak cocok (deteksi korupsi transport)
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { $ref: '#/components/schemas/FieldPlacement' }
+
+    SignMeta:
+      type: object
+      required: [input_sha256, field_name, key_id, totp_code, verify_url, appearance]
+      additionalProperties: false
+      properties:
+        input_sha256: { $ref: '#/components/schemas/Sha256' }
+        field_name: { type: string, pattern: '^sig_[0-9]{1,2}$' }
+        key_id: { $ref: '#/components/schemas/KeyId' }
+        totp_code: { type: string, pattern: '^[0-9]{6}$' }
+        verify_url:
+          type: string
+          format: uri
+          pattern: '^https://'
+          description: "URL halaman verifikasi, dirender sebagai QR. Contoh: https://verifikasi.example.sch.id/v/{public_id}"
+        certify:
+          type: boolean
+          default: false
+          description: |
+            `true` hanya untuk penanda tangan pertama: tanda tangan sertifikasi dengan DocMDP
+            level 2 (hanya pengisian form/tanda tangan yang diizinkan setelahnya).
+        appearance:
+          type: object
+          required: [name, position]
+          additionalProperties: false
+          description: Teks di samping QR. Tanggal diambil dari waktu tanda tangan, bukan dari request.
+          properties:
+            name: { type: string, maxLength: 128 }
+            position: { type: string, maxLength: 128 }
+            nip: { type: [string, 'null'], pattern: '^[0-9]{18}$' }
+        reason: { type: [string, 'null'], maxLength: 200, description: "Contoh: Menyetujui dokumen" }
+        location: { type: [string, 'null'], maxLength: 100 }
+        actor_ref: { $ref: '#/components/schemas/ActorRef' }
+
+    SignatureResult:
+      type: object
+      required: [field_name, intact, trusted, valid, revoked, coverage]
+      properties:
+        field_name: { type: string }
+        signer_name: { type: [string, 'null'] }
+        certificate_serial: { type: [string, 'null'] }
+        key_id:
+          oneOf:
+            - $ref: '#/components/schemas/KeyId'
+            - type: 'null'
+          description: Terisi jika sertifikat diterbitkan CA internal ini
+        signed_at: { type: [string, 'null'], format: date-time, description: Dari token timestamp }
+        timestamp_valid: { type: boolean }
+        intact: { type: boolean, description: Byte yang ditandatangani tidak berubah }
+        trusted: { type: boolean, description: Rantai sertifikat berakhir di Root CA internal }
+        revoked: { type: boolean, description: Sertifikat dicabut sebelum waktu tanda tangan }
+        valid: { type: boolean, description: "intact && trusted && !revoked && timestamp_valid" }
+        certification_level: { type: [string, 'null'], enum: [no_changes, form_filling, annotations, null] }
+        coverage:
+          type: string
+          enum: [entire_file, entire_revision, partial]
+          description: "`entire_revision` normal untuk tanda tangan yang diikuti tanda tangan lain"
+        problems: { type: array, items: { type: string } }
+
+    ValidationReport:
+      type: object
+      required: [document_sha256, status, signatures, modified_after_last_signature]
+      properties:
+        document_sha256: { $ref: '#/components/schemas/Sha256' }
+        status:
+          type: string
+          enum: [valid, invalid, unsigned]
+          description: "`valid` hanya jika semua tanda tangan valid dan tidak ada perubahan tidak sah"
+        modified_after_last_signature:
+          type: boolean
+          description: Ada perubahan di luar yang diizinkan DocMDP setelah tanda tangan terakhir
+        signatures:
+          type: array
+          items: { $ref: '#/components/schemas/SignatureResult' }
+        crl_this_update: { type: [string, 'null'], format: date-time }
+
+    Health:
+      type: object
+      required: [status, checks]
+      properties:
+        status: { type: string, enum: [ok, degraded, down] }
+        checks:
+          type: object
+          properties:
+            hsm: { type: string, enum: [ok, error] }
+            tsa: { type: string, enum: [ok, error, unknown] }
+            crl_fresh: { type: string, enum: [ok, stale] }
+        version: { type: string }
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri-reference, default: about:blank }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code:
+          type: string
+          description: Kode stabil untuk dipetakan Laravel ke pesan pengguna
+          enum:
+            - validation_failed
+            - unauthorized
+            - signer_not_found
+            - signer_exists
+            - signer_revoked
+            - signer_totp_pending
+            - totp_invalid
+            - totp_replayed
+            - totp_locked
+            - totp_already_active
+            - field_not_found
+            - field_already_signed
+            - previous_field_unsigned
+            - field_out_of_bounds
+            - field_overlap
+            - page_not_found
+            - pdf_invalid
+            - pdf_encrypted
+            - pdf_already_signed
+            - pdf_too_large
+            - pdf_modified_after_signature
+            - input_hash_mismatch
+            - hsm_unavailable
+            - tsa_unavailable
+        request_id: { type: string }

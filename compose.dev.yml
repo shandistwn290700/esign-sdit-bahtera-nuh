@@ -1,0 +1,78 @@
+# Local development stack. Production runs the same images on Coolify (ADR-0009).
+#
+#   node scripts/dev-env.mjs                                         # once: dev secrets
+#   docker compose -f compose.dev.yml up -d --build signer postgres redis mailpit
+#   docker compose -f compose.dev.yml exec signer tte-signer init-dev-ca   # once: dev CA, then `restart signer`
+#   docker compose -f compose.dev.yml exec -T signer python - < signing-service/scripts/smoke.py
+#   docker compose -f compose.dev.yml --profile test run --rm --build signer-test
+#   docker compose -f compose.dev.yml --profile mock up -d signer-mock     # mock for Laravel
+name: tte-qr
+
+services:
+  signer:
+    build: { context: ./signing-service, target: runtime }
+    env_file: ./signing-service/.env.dev
+    volumes: [signer-data:/data]
+    networks: [internal]
+    # No published ports: reachable only as http://signer:8000 inside the network.
+
+  signer-test:
+    build: { context: ./signing-service, target: test }
+    profiles: [test]
+    network_mode: none
+    # Mounted so fixes are picked up without rebuilding (pytest puts src/ first on sys.path).
+    volumes:
+      - ./signing-service/src:/src/src:ro
+      - ./signing-service/tests:/src/tests:ro
+      - ./signing-service/pyproject.toml:/src/pyproject.toml:ro
+
+  signer-mock:
+    image: stoplight/prism:5
+    command: mock -h 0.0.0.0 -p 4010 /spec/openapi.yaml
+    volumes: [./signing-service/openapi.yaml:/spec/openapi.yaml:ro]
+    profiles: [mock]
+    networks: [internal]
+    ports: ["127.0.0.1:4010:4010"]
+
+  app:
+    build: { context: ./app-laravel, dockerfile: docker/dev.Dockerfile }
+    volumes:
+      - ./app-laravel:/app
+      # node_modules needs symlinks, which a Windows bind mount cannot hold.
+      - app-node-modules:/app/node_modules
+    environment:
+      # Docker Desktop on Windows has no IPv6 route; npm otherwise tries IPv6 first.
+      NODE_OPTIONS: --dns-result-order=ipv4first
+    networks: [internal]
+    ports: ["127.0.0.1:8000:8000", "127.0.0.1:5173:5173"]
+    depends_on: [postgres, redis, mailpit]
+    # Serves built assets (npm run build). For hot reload, also run: exec app npx vite --host 0.0.0.0
+    command: sh -c "php artisan queue:work --sleep=1 --tries=3 & exec php artisan serve --host=0.0.0.0 --port=8000"
+    # One-off commands: docker compose -f compose.dev.yml run --rm app php artisan test
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: tte
+      POSTGRES_USER: tte
+      POSTGRES_PASSWORD: tte-dev-only
+    volumes: [pg-data:/var/lib/postgresql/data]
+    networks: [internal]
+    ports: ["127.0.0.1:5432:5432"]
+
+  redis:
+    image: redis:7.4-alpine
+    networks: [internal]
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    networks: [internal]
+    ports: ["127.0.0.1:8025:8025"]
+
+networks:
+  internal: {}
+
+volumes:
+  signer-data: {}
+  pg-data: {}
+  app-node-modules: {}
