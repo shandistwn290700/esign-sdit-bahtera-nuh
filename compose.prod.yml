@@ -39,13 +39,14 @@ x-laravel: &laravel
     CACHE_STORE: redis
     REDIS_HOST: redis
     REDIS_PORT: "6379"
-    MAIL_MAILER: smtp
-    MAIL_HOST: ${MAIL_HOST:?set MAIL_HOST}
+    # MAIL_MAILER=log until an SMTP account exists (mail is then only written to the log).
+    MAIL_MAILER: ${MAIL_MAILER:-smtp}
+    MAIL_HOST: ${MAIL_HOST:-}
     MAIL_PORT: ${MAIL_PORT:-587}
-    MAIL_USERNAME: ${MAIL_USERNAME:?set MAIL_USERNAME}
-    MAIL_PASSWORD: ${MAIL_PASSWORD:?set MAIL_PASSWORD}
+    MAIL_USERNAME: ${MAIL_USERNAME:-}
+    MAIL_PASSWORD: ${MAIL_PASSWORD:-}
     MAIL_SCHEME: ${MAIL_SCHEME:-smtp}
-    MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?set MAIL_FROM_ADDRESS}
+    MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-esign@example.invalid}
     MAIL_FROM_NAME: "e-Sign SDIT Bahtera Nuh"
     SIGNER_URL: http://signer:8000
     SIGNER_TOKEN: ${SIGNER_API_TOKEN:?set SIGNER_API_TOKEN (48+ random characters)}
@@ -63,6 +64,9 @@ services:
       AUTORUN_ENABLED: "true"
       AUTORUN_LARAVEL_MIGRATION: "true"
       AUTORUN_LARAVEL_STORAGE_LINK: "false"
+      # First deploy only: creates the first admin if none exists (docker/entrypoint.d). Remove after login.
+      TTE_ADMIN_EMAIL: ${TTE_ADMIN_EMAIL:-}
+      TTE_ADMIN_PASSWORD: ${TTE_ADMIN_PASSWORD:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

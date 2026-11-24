@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Schedule;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use PragmaRX\Google2FA\Google2FA;
 
@@ -29,6 +30,44 @@ Artisan::command('tte:create-admin {email} {name}', function (string $email, str
 
     return 0;
 })->purpose('Create the first administrator account');
+
+// First deploy without email: create the first admin from TTE_ADMIN_EMAIL / TTE_ADMIN_PASSWORD
+// (Coolify secrets). Runs at container start (docker/entrypoint.d) and does nothing once any admin
+// exists, so the variables can stay set until the operator removes them after the first login.
+Artisan::command('tte:bootstrap-admin', function (AuditLogger $audit): int {
+    $email = Str::lower(trim((string) getenv('TTE_ADMIN_EMAIL')));
+    $password = (string) getenv('TTE_ADMIN_PASSWORD');
+    if ($email === '' || $password === '') {
+        $this->line('tte:bootstrap-admin: TTE_ADMIN_EMAIL/TTE_ADMIN_PASSWORD not set, skipped.');
+
+        return 0;
+    }
+    if (User::query()->where('role', UserRole::Admin)->exists()) {
+        $this->line('tte:bootstrap-admin: an administrator already exists, skipped. Remove TTE_ADMIN_* now.');
+
+        return 0;
+    }
+
+    $validator = Validator::make(
+        ['email' => $email, 'password' => $password],
+        ['email' => ['required', 'email', 'max:254', 'unique:users,email'], 'password' => ['required', Illuminate\Validation\Rules\Password::defaults()]],
+    );
+    if ($validator->fails()) {
+        // Never echo the password; only the rule messages.
+        foreach ($validator->errors()->all() as $message) {
+            $this->error("tte:bootstrap-admin: {$message}");
+        }
+
+        return 1;
+    }
+
+    $user = new User(['name' => 'Administrator', 'email' => $email, 'role' => UserRole::Admin, 'password' => $password]);
+    $user->forceFill(['email_verified_at' => now()])->save();
+    $audit->record('user.created', $user, ['email' => $email, 'role' => 'admin', 'via' => 'bootstrap']);
+    $this->info("tte:bootstrap-admin: administrator {$email} created. Log in, set up 2FA, then remove TTE_ADMIN_*.");
+
+    return 0;
+})->purpose('Create the first administrator from TTE_ADMIN_EMAIL / TTE_ADMIN_PASSWORD (first deploy)');
 
 Artisan::command('audit:verify', function (AuditLogger $audit): int {
     $broken = $audit->firstBrokenEntry();

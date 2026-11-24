@@ -11,6 +11,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
@@ -53,6 +54,11 @@ class AppServiceProvider extends ServiceProvider
         // Session cookies carry a signer's authenticated session; never send them over plain http.
         if (app()->isProduction() && config('session.secure') !== true) {
             throw new RuntimeException('SESSION_SECURE_COOKIE must be true in production.');
+        }
+        // Behind Cloudflare -> Traefik the forwarded proto may not survive every hop; the public
+        // site is https-only, so generated URLs (assets, redirects, signed links) must be https.
+        if (app()->isProduction() && str_starts_with((string) config('app.url'), 'https://')) {
+            URL::forceScheme('https');
         }
 
         // Resources are only used as Inertia props here; the "data" wrapper would hide fields.

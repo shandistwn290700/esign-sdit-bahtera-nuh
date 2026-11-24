@@ -41,4 +41,5 @@ ENV PHP_OPCACHE_ENABLE=1 \
     LOG_CHANNEL=stderr \
     AUTORUN_ENABLED=false
 COPY --from=build --chown=www-data:www-data /var/www/html /var/www/html
+COPY --chmod=0755 docker/entrypoint.d/60-tte-bootstrap-admin.sh /etc/entrypoint.d/60-tte-bootstrap-admin.sh
 USER www-data
