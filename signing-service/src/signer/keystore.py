@@ -95,11 +95,13 @@ class Pkcs11KeyStore:
             return der
 
     def sign_digest(self, label: str, digest: bytes) -> bytes:
-        from pkcs11 import Mechanism, ObjectClass
+        from pkcs11 import Mechanism, ObjectClass, SignMixin
         from pkcs11.util.ec import encode_ecdsa_signature
 
         with self.lock, self._wrap():
             key = self._session.get_key(object_class=ObjectClass.PRIVATE_KEY, label=label)
+            if not isinstance(key, SignMixin):  # python-pkcs11 >= 0.9 types get_key() as Key
+                raise KeyStoreError(f"object {label!r} cannot sign")
             raw = key.sign(digest, mechanism=Mechanism.ECDSA)
             der: bytes = encode_ecdsa_signature(raw)
             return der

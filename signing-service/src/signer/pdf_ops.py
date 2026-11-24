@@ -189,8 +189,12 @@ def _timestamp_time(signed: bytes, field_name: str) -> datetime:
     for emb in reader.embedded_signatures:
         if emb.field_name != field_name:
             continue
-        tst = emb.attached_timestamp_data
-        if tst is not None:
+        # Read the RFC 3161 token straight from the CMS unsigned attributes: pyHanko 0.38 dropped
+        # the `attached_timestamp_data` shortcut, and this does not depend on its helper names.
+        for attr in emb.signer_info["unsigned_attrs"] or []:
+            if attr["type"].native != "signature_time_stamp_token":
+                continue
+            tst = attr["values"][0]["content"]
             gen_time: datetime = tst["encap_content_info"]["content"].parsed["gen_time"].native
             return gen_time
         if emb.self_reported_timestamp is not None:

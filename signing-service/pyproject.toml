@@ -2,16 +2,18 @@
 name = "tte-signer"
 version = "1.0.0"
 description = "Internal signing service for TTE QR (PAdES + SoftHSM2)"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
-    "fastapi~=0.115.0",
-    "uvicorn[standard]~=0.32.0",
-    "python-multipart~=0.0.12",
-    "pydantic~=2.9",
-    "pydantic-settings~=2.6",
-    "pyHanko[pkcs11,qr]~=0.25.1",
+    # 2026-11-24: lifted after Coolify image scan (Starlette KEV CVE-2026-48710, cryptography CVEs).
+    "fastapi>=0.165,<0.166",
+    "starlette>=1.10,<2",
+    "uvicorn[standard]>=0.54,<0.55",
+    "python-multipart>=0.0.34,<0.1",
+    "pydantic~=2.14",
+    "pydantic-settings~=2.16",
+    "pyHanko[pkcs11,qr]~=0.38.2",
     "asn1crypto~=1.5",
-    "cryptography>=43,<45",
+    "cryptography>=50.0.2,<51",
     "pyotp~=2.9",
     "certifi>=2024.8.30",
 ]
