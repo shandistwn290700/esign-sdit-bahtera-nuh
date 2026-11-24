@@ -7,7 +7,7 @@
 
 | Service | Fungsi | Domain |
 |---|---|---|
-| `web` | Laravel (Nginx + PHP-FPM, port 8080). Menjalankan migrasi saat start. | **Ya**, satu-satunya |
+| `web` | Laravel (Nginx + PHP-FPM, port 80). Menjalankan migrasi saat start. | **Ya**, satu-satunya |
 | `worker` | Antrean (email notifikasi) | Tidak |
 | `scheduler` | Tugas terjadwal (cek dan jangkar audit log harian) | Tidak |
 | `signer` | Signing Service + SoftHSM | **Tidak boleh** |
@@ -49,7 +49,7 @@ Lima nilai bertanda **simpan offline** di tabel di atas ikut ditulis di kertas y
 
 ## 3. Domain
 
-Di Coolify, buka service **web → Domains**, isi `https://esign.sditbahteranuh.sch.id:8080`. Port 8080 adalah port internal container; pengunjung tetap membuka alamat biasa tanpa port. Arahkan DNS domain ke IP VPS.
+Di Coolify, buka service **web → Domains**, isi `https://esign.sditbahteranuh.sch.id` (tanpa port: container `web` mendengarkan di port 80). Arahkan DNS domain ke IP VPS.
 
 Service lain **tidak** diberi domain.
 
