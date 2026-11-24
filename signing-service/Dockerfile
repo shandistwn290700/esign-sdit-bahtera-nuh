@@ -27,7 +27,10 @@ CMD ["sh", "-c", "ruff check src tests && mypy src && pytest -q"]
 
 FROM base AS runtime
 COPY --from=build /wheels /wheels
+# pip is not needed at runtime; removing it also drops its vendored setuptools code
+# (pip/_vendor SBOM lists setuptools 70.3.0, CVE-2025-47273) from the image.
 RUN pip install --no-index /wheels/*.whl && rm -rf /wheels \
+ && pip uninstall -y pip && rm -rf /usr/local/lib/python3.13/ensurepip \
  && groupadd -r signer && useradd -r -g signer -u 10001 -d /data signer \
  && mkdir -p /data && chown signer:signer /data
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh

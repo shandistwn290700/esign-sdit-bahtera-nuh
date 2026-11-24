@@ -64,7 +64,7 @@ kelola pengguna, halaman Semua dokumen, dan unduh PDF. Juga dicek: hasil peminda
 | # | Tingkat | Temuan | Perbaikan |
 |---|---|---|---|
 | 9 | Sedang | Di belakang Cloudflare semua proxy dipercaya, sedangkan Cloudflare *menambahkan* ke `X-Forwarded-For` kiriman pengunjung. IP klien bisa dipalsukan, sehingga batas percobaan login (email + IP) bisa dilewati dan IP di audit log bisa dipalsukan. | IP klien diambil dari `CF-Connecting-IP`, yang diisi Cloudflare sendiri. Tes regresi membuktikan IP palsu `1.2.3.4` sebelumnya terbaca. |
-| 10 | Tinggi | Image Signing Service: Starlette 0.46.2 (termasuk CVE-2026-48710, ada di daftar KEV) dan cryptography 44.0.3. | Python 3.13, FastAPI 0.165, Starlette 1.10, cryptography 50.0.2, pyHanko 0.38.2, python-pkcs11 0.9.5. Diverifikasi dengan smoke test SoftHSM + TSA sungguhan. |
+| 10 | Tinggi | Image Signing Service: Starlette 0.46.2 (termasuk CVE-2026-48710, ada di daftar KEV) dan cryptography 44.0.3. | Python 3.13, FastAPI 0.165, Starlette 1.10, cryptography 50.0.2, pyHanko 0.38.2, python-pkcs11 0.9.5. Diverifikasi dengan smoke test SoftHSM + TSA sungguhan. `pip` dihapus dari image runtime, karena kode setuptools 70.3.0 yang dibawanya terkena CVE-2025-47273. |
 | 11 | Tinggi | Image backup: paket `rclone` Alpine membawa CVE kritis (satu di KEV), padahal fitur off-site belum dipakai. | `rclone` dihapus dari image, ditambah `apk upgrade`. Akan dipasang ulang (versi terbaru, dipin) saat tujuan off-site dipilih. |
 | 12 | Sedang | `LOG_LEVEL=debug` sementara di produksi, sehingga tautan reset password tercatat di log. | Kembalikan ke `warning` setelah SMTP aktif (tercatat sebagai tindak lanjut). |
 

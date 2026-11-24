@@ -111,11 +111,15 @@ jobs:
           docker build -f app-laravel/docker/Dockerfile -t esign-web app-laravel
           docker build --target runtime -t esign-signer signing-service
           docker build -t esign-backup ops/backup
+      # --skip-files: the python base image layer still holds pip's vendored SBOM (lists setuptools
+      # 70.3.0). The signer Dockerfile uninstalls pip, but Trivy reads SBOM files from lower layers
+      # despite the deletion. Skipping that one file keeps any real setuptools install detectable.
       - name: Scan web and signer (blocking on fixable HIGH/CRITICAL)
         run: |
           for img in esign-web esign-signer; do
             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY" image \
-              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$img"
+              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress \
+              --skip-files /usr/local/lib/python3.13/site-packages/pip/_vendor/bom.cdx.json "$img"
           done
       - name: Scan backup (report only; base image postgres:17-alpine is upstream)
         run: |
