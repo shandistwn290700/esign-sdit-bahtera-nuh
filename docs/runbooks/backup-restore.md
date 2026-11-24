@@ -45,7 +45,9 @@ Program `age` tersedia untuk Windows, macOS, dan Linux (https://age-encryption.o
 
 ## Salinan off-site (disarankan)
 
-Backup yang hanya ada di VPS yang sama ikut hilang kalau VPS rusak. Salinan off-site dibuat dengan `rclone`. Konfigurasinya diisi lewat environment variable Coolify, tanpa berkas config. Contoh untuk penyimpanan S3/R2:
+Backup yang hanya ada di VPS yang sama ikut hilang kalau VPS rusak. Salinan off-site dibuat dengan `rclone`.
+
+**Status 2026-11-24:** `rclone` sengaja **belum terpasang** di image backup, karena versi paket Alpine-nya membawa CVE kritis. Saat tujuan off-site dipilih, pasang `rclone` versi terbaru yang dipin di `ops/backup/Dockerfile`. Selama belum terpasang, mengisi `BACKUP_RCLONE_REMOTE` akan menghasilkan `ERROR` di log; salinan lokal tetap dibuat. Konfigurasinya diisi lewat environment variable Coolify, tanpa berkas config. Contoh untuk penyimpanan S3/R2:
 
 ```
 BACKUP_RCLONE_REMOTE=offsite:esign-backup

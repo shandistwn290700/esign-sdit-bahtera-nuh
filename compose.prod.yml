@@ -3,6 +3,7 @@
 # - Only `web` gets a domain in Coolify. Nginx listens on 8080, the port the image EXPOSEs;
 #   Traefik picks it automatically, so the domain needs no port. Nothing publishes a host port.
 # - `signer` has no domain: Laravel reaches it as http://signer:8000 on the stack network.
+# - Every service has memory/CPU limits: the server is shared with other apps (Moodle, Nextcloud).
 # - No custom networks: Coolify attaches its own per-stack network, which Traefik also joins.
 #   (A second network made Traefik pick an IP it cannot reach: 502.)
 # - Secrets come from Coolify environment variables; `${VAR:?}` makes a missing one fail loudly.
@@ -60,8 +61,13 @@ x-laravel: &laravel
 services:
   web:
     <<: *laravel
+    deploy:
+      resources:
+        limits: { memory: 1G, cpus: "1.5" }
     environment:
       <<: *laravel-env
+      # 10 PHP workers (~60 MB each) fit the 1G limit; plenty for one school.
+      PHP_FPM_PM_MAX_CHILDREN: "10"
       # Only the web container migrates and caches config/routes/views at start.
       AUTORUN_ENABLED: "true"
       AUTORUN_LARAVEL_MIGRATION: "true"
@@ -78,6 +84,9 @@ services:
 
   worker:
     <<: *laravel
+    deploy:
+      resources:
+        limits: { memory: 384M, cpus: "0.5" }
     command: ["php", "/var/www/html/artisan", "queue:work", "--tries=3", "--max-time=3600"]
     stop_signal: SIGTERM
     healthcheck:
@@ -88,6 +97,9 @@ services:
 
   scheduler:
     <<: *laravel
+    deploy:
+      resources:
+        limits: { memory: 256M, cpus: "0.25" }
     command: ["php", "/var/www/html/artisan", "schedule:work"]
     stop_signal: SIGTERM
     healthcheck:
@@ -100,6 +112,9 @@ services:
     build:
       context: ./signing-service
       target: runtime
+    deploy:
+      resources:
+        limits: { memory: 768M, cpus: "1.0" }
     restart: unless-stopped
     volumes:
       - signer-data:/data
@@ -118,6 +133,9 @@ services:
 
   postgres:
     image: postgres:17-alpine
+    deploy:
+      resources:
+        limits: { memory: 512M, cpus: "1.0" }
     restart: unless-stopped
     volumes:
       - pg-data:/var/lib/postgresql/data
@@ -133,6 +151,9 @@ services:
 
   redis:
     image: redis:7.4-alpine
+    deploy:
+      resources:
+        limits: { memory: 192M, cpus: "0.25" }
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
@@ -145,6 +166,9 @@ services:
 
   backup:
     build: ./ops/backup
+    deploy:
+      resources:
+        limits: { memory: 512M, cpus: "0.5" }
     restart: unless-stopped
     volumes:
       - app-storage:/source/storage:ro

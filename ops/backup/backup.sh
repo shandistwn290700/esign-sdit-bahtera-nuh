@@ -42,7 +42,10 @@ echo "backup ${stamp}: wrote $out ($(du -h "$out" | cut -f1))"
 
 # 6. Optional off-site copy (ADR-0009). Configure rclone via RCLONE_CONFIG_* env variables.
 offsite_failed=0
-if [ -n "${BACKUP_RCLONE_REMOTE:-}" ]; then
+if [ -n "${BACKUP_RCLONE_REMOTE:-}" ] && ! command -v rclone >/dev/null 2>&1; then
+  echo "backup ${stamp}: ERROR BACKUP_RCLONE_REMOTE is set but rclone is not installed in this image (local copy kept)" >&2
+  offsite_failed=1
+elif [ -n "${BACKUP_RCLONE_REMOTE:-}" ]; then
   if rclone copy "$out" "$BACKUP_RCLONE_REMOTE"; then
     echo "backup ${stamp}: copied to $BACKUP_RCLONE_REMOTE"
   else
