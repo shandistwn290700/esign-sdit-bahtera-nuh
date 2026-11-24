@@ -54,3 +54,23 @@ Setiap perbaikan punya tes regresi di `tests/Feature/SecurityHardeningTest.php`.
 3. **Isolasi jaringan Signing Service, PIN HSM, dan backup kunci dokumen** akan ditangani di tahap deploy oleh `devops-engineer`.
 4. **Prosedur Root CA offline** masih perlu ditulis sebagai runbook.
 5. **`pip-audit` untuk Signing Service** belum dijalankan karena container uji tidak punya akses internet. Jalankan di CI.
+
+## Review lanjutan — 2026-11-24 (setelah deploy produksi)
+
+Cakupan: kode yang ditambahkan setelah review pertama, yaitu `tte:bootstrap-admin`, pengalihan
+HTTPS di belakang Cloudflare, unggah logo (termasuk SVG), hapus permanen dokumen yang dicabut,
+kelola pengguna, halaman Semua dokumen, dan unduh PDF. Juga dicek: hasil pemindaian image Coolify.
+
+| # | Tingkat | Temuan | Perbaikan |
+|---|---|---|---|
+| 9 | Sedang | Di belakang Cloudflare semua proxy dipercaya, sedangkan Cloudflare *menambahkan* ke `X-Forwarded-For` kiriman pengunjung. IP klien bisa dipalsukan, sehingga batas percobaan login (email + IP) bisa dilewati dan IP di audit log bisa dipalsukan. | IP klien diambil dari `CF-Connecting-IP`, yang diisi Cloudflare sendiri. Tes regresi membuktikan IP palsu `1.2.3.4` sebelumnya terbaca. |
+| 10 | Tinggi | Image Signing Service: Starlette 0.46.2 (termasuk CVE-2026-48710, ada di daftar KEV) dan cryptography 44.0.3. | Python 3.13, FastAPI 0.165, Starlette 1.10, cryptography 50.0.2, pyHanko 0.38.2, python-pkcs11 0.9.5. Diverifikasi dengan smoke test SoftHSM + TSA sungguhan. |
+| 11 | Tinggi | Image backup: paket `rclone` Alpine membawa CVE kritis (satu di KEV), padahal fitur off-site belum dipakai. | `rclone` dihapus dari image, ditambah `apk upgrade`. Akan dipasang ulang (versi terbaru, dipin) saat tujuan off-site dipilih. |
+| 12 | Sedang | `LOG_LEVEL=debug` sementara di produksi, sehingga tautan reset password tercatat di log. | Kembalikan ke `warning` setelah SMTP aktif (tercatat sebagai tindak lanjut). |
+
+Diperiksa dan aman:
+- **Bootstrap admin:** password tidak pernah dicetak, divalidasi dengan aturan produksi, dan tidak berbuat apa-apa jika admin sudah ada.
+- **Logo SVG:** disajikan dengan CSP `sandbox` + `nosniff` dan nama berkas acak.
+- **Hapus dokumen:** hanya untuk dokumen yang dicabut, oleh pembuat atau admin, dengan konfirmasi ketik dan snapshot audit.
+- **Pencarian admin:** wildcard `LIKE` di-escape.
+- **Nama berkas unduhan:** berupa slug, sehingga tidak bisa dipakai untuk injeksi header.

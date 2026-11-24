@@ -42,6 +42,17 @@ final class EnforceHttpsBehindCloudflare
             $request->server->set('HTTPS', 'on');
         }
 
+        // Client IP: Cloudflare APPENDS to a visitor-supplied X-Forwarded-For, and all proxies are
+        // trusted, so the left-most (spoofable) entry would become request()->ip(). That would let
+        // an attacker rotate fake IPs past the login throttle (keyed by email + IP) and forge IPs
+        // in the audit log. CF-Connecting-IP is set by Cloudflare itself and cannot be supplied.
+        if ($scheme !== null) {
+            $cfIp = (string) $request->headers->get('CF-Connecting-IP', '');
+            if (filter_var($cfIp, FILTER_VALIDATE_IP) !== false) {
+                $request->headers->set('X-Forwarded-For', $cfIp);
+            }
+        }
+
         return $next($request);
     }
 }

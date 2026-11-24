@@ -1,0 +1,123 @@
+# CI for e-Sign SDIT Bahtera Nuh: tests, static checks and image scans on every push / PR.
+# Deployments stay manual in Coolify; this workflow only tells you whether a commit is safe to deploy.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  laravel:
+    name: Laravel (PHPUnit + Pint)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: app-laravel
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: tte
+          POSTGRES_PASSWORD: tte
+          POSTGRES_DB: tte_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tte -d tte_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_USERNAME: tte
+      DB_PASSWORD: tte
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: pdo_pgsql, intl, bcmath, zip, pcntl
+          coverage: none
+      - name: Composer install
+        run: composer install --no-interaction --prefer-dist --no-progress
+      - name: App key
+        run: cp .env.example .env && php artisan key:generate
+      - name: Pint (code style)
+        run: vendor/bin/pint --test
+      - name: PHPUnit
+        run: vendor/bin/phpunit
+      - name: Composer audit
+        run: composer audit --no-interaction
+
+  frontend:
+    name: Frontend (lint, types, build)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: app-laravel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: intl, bcmath, zip
+          coverage: none
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: app-laravel/package-lock.json
+      - run: composer install --no-interaction --prefer-dist --no-progress
+      - run: cp .env.example .env && php artisan key:generate
+      - run: npm ci --no-audit --no-fund
+      - name: Wayfinder routes (needed by vue-tsc)
+        run: php artisan wayfinder:generate --with-form
+      - name: Format + lint
+        run: npm run check
+      - name: Type check
+        run: npx vue-tsc --noEmit
+      - name: Build
+        run: npm run build
+      - name: npm audit (production dependencies)
+        run: npm audit --omit=dev --audit-level=high
+
+  signing-service:
+    name: Signing Service (ruff, mypy, pytest)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build test image
+        run: docker build --target test -t signer-test signing-service
+      - name: ruff + mypy --strict + pytest
+        run: docker run --rm --network none signer-test
+
+  images:
+    name: Image scan (Trivy)
+    runs-on: ubuntu-24.04
+    needs: [laravel, frontend, signing-service]
+    env:
+      TRIVY: aquasec/trivy:0.57.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production images
+        run: |
+          docker build -f app-laravel/docker/Dockerfile -t esign-web app-laravel
+          docker build --target runtime -t esign-signer signing-service
+          docker build -t esign-backup ops/backup
+      - name: Scan web and signer (blocking on fixable HIGH/CRITICAL)
+        run: |
+          for img in esign-web esign-signer; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY" image \
+              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$img"
+          done
+      - name: Scan backup (report only; base image postgres:17-alpine is upstream)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY" image \
+            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 --no-progress esign-backup
