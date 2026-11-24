@@ -48,6 +48,11 @@ final class SignerException extends RuntimeException
             'field_out_of_bounds' => 'Kotak QR berada di luar halaman.',
             'field_overlap' => 'Kotak QR saling tumpang tindih.',
             'page_not_found' => 'Halaman untuk kotak QR tidak ada di PDF.',
+            // Infrastructure: say what is wrong and who can fix it, instead of a generic "gangguan".
+            'ca_not_initialized' => 'Sertifikat CA tanda tangan belum dipasang di server. Hubungi admin untuk menjalankan prosedur Root CA.',
+            'hsm_unavailable' => 'Modul kunci tanda tangan tidak dapat diakses. Coba lagi beberapa saat; bila berulang, hubungi admin.',
+            'tsa_unavailable' => 'Server stempel waktu tidak dapat dihubungi. Coba lagi beberapa saat.',
+            'signer_unreachable' => 'Layanan tanda tangan tidak dapat dihubungi. Coba lagi beberapa saat; bila berulang, hubungi admin.',
             default => 'Layanan tanda tangan sedang gangguan. Coba lagi beberapa saat.',
         };
     }

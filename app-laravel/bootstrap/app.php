@@ -1,6 +1,7 @@
 <?php
 
 use App\Exceptions\DocumentStateException;
+use App\Http\Middleware\EnforceHttpsBehindCloudflare;
 use App\Http\Middleware\HandleAppearance;
 use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\SecurityHeaders;
@@ -26,6 +27,9 @@ return Application::configure(basePath: dirname(__DIR__))
         if (is_string($proxies = env('TRUSTED_PROXIES')) && $proxies !== '') {
             $middleware->trustProxies(at: $proxies === '*' ? '*' : array_map('trim', explode(',', $proxies)));
         }
+
+        // Global, so the redirect also covers public pages and the PKI endpoints.
+        $middleware->append(EnforceHttpsBehindCloudflare::class);
 
         $middleware->web(append: [
             SecurityHeaders::class,

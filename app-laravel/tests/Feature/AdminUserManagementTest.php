@@ -154,6 +154,17 @@ final class AdminUserManagementTest extends TestCase
         $this->assertSame(1, AuditLog::query()->where('action', 'user.activated')->count());
     }
 
+    public function test_enabling_signing_before_ca_explains_what_is_missing(): void
+    {
+        $user = User::factory()->withTwoFactor()->create();
+        $this->signer->failNext(503, 'ca_not_initialized');
+
+        $this->actingAs($this->admin)->post(route('admin.users.signing.enable', $user))
+            ->assertSessionHasErrors(['action' => 'Sertifikat CA tanda tangan belum dipasang di server. Hubungi admin untuk menjalankan prosedur Root CA.']);
+
+        $this->assertNull($user->fresh()->signer_key_id);
+    }
+
     public function test_staff_cannot_manage_users(): void
     {
         $staff = User::factory()->withTwoFactor()->create();

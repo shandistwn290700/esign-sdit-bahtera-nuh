@@ -505,7 +505,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
     Unavailable:
-      description: "`code`: `hsm_unavailable` atau `tsa_unavailable`. Aman untuk dicoba ulang dengan kode TOTP baru."
+      description: "`code`: `hsm_unavailable`, `tsa_unavailable` (aman dicoba ulang dengan kode TOTP baru) atau `ca_not_initialized` (CA belum dipasang; perlu prosedur Root CA, bukan dicoba ulang)."
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -743,4 +743,5 @@ components:
             - input_hash_mismatch
             - hsm_unavailable
             - tsa_unavailable
+            - ca_not_initialized
         request_id: { type: string }

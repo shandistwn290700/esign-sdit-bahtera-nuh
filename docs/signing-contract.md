@@ -44,7 +44,10 @@ Status: **Draft — menunggu persetujuan divisi Backend.**
 | `signer_revoked` | Sertifikat Anda dicabut. Hubungi admin. |
 | `field_already_signed` / `previous_field_unsigned` | Status dokumen berubah. Muat ulang halaman. |
 | `input_hash_mismatch` / `pdf_modified_after_signature` | Dokumen tidak konsisten. Hubungi admin (insiden). |
-| `hsm_unavailable` / `tsa_unavailable` | Layanan tanda tangan sedang gangguan. Coba lagi beberapa saat. |
+| `hsm_unavailable` | Modul kunci tanda tangan tidak dapat diakses. Coba lagi beberapa saat; bila berulang, hubungi admin. |
+| `tsa_unavailable` | Server stempel waktu tidak dapat dihubungi. Coba lagi beberapa saat. |
+| `ca_not_initialized` | Sertifikat CA tanda tangan belum dipasang di server. Hubungi admin (prosedur Root CA). |
+| `signer_unreachable` (Laravel) | Layanan tanda tangan tidak dapat dihubungi. Coba lagi beberapa saat; bila berulang, hubungi admin. |
 
 ## Keterbatasan yang diketahui
 

@@ -186,7 +186,7 @@ final class DocumentWorkflowTest extends TestCase
         $this->signer->failNext(503, 'hsm_unavailable');
 
         $this->actingAs($first)->post(route('documents.sign', $doc), ['totp_code' => '123456'])
-            ->assertSessionHasErrors(['action' => 'Layanan tanda tangan sedang gangguan. Coba lagi beberapa saat.']);
+            ->assertSessionHasErrors(['action' => 'Modul kunci tanda tangan tidak dapat diakses. Coba lagi beberapa saat; bila berulang, hubungi admin.']);
     }
 
     public function test_current_signer_can_reject(): void

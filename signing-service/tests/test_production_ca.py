@@ -175,3 +175,23 @@ def test_import_requires_a_pending_key(svc: Services) -> None:
     root = OfflineRoot()
     with pytest.raises(CaSetupError, match="ca-csr"):
         import_ca_certificates(svc, root.pem, root.pem)
+
+
+def test_signer_creation_before_ca_reports_ca_not_initialized(svc: Services) -> None:
+    from fastapi.testclient import TestClient
+
+    from signer.app import create_app
+
+    with TestClient(create_app(svc)) as client:
+        resp = client.post(
+            "/v1/signers",
+            headers={"Authorization": "Bearer " + "t" * 40},
+            json={
+                "signer_ref": "00000000-0000-4000-8000-000000000001",
+                "full_name": "Uji",
+                "position": "Guru",
+                "email": "uji@example.sch.id",
+            },
+        )
+    assert resp.status_code == 503
+    assert resp.json()["code"] == "ca_not_initialized"

@@ -190,7 +190,7 @@ class CertificateAuthority:
         der = self._store.get_system(name)
         if der is None:
             raise ProblemError(
-                503, "hsm_unavailable", "CA belum diinisialisasi", f"{name} tidak ditemukan"
+                503, "ca_not_initialized", "CA belum diinisialisasi", f"{name} tidak ditemukan"
             )
         return x509.Certificate.load(der)
 
