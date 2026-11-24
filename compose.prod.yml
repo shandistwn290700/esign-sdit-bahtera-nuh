@@ -1,6 +1,7 @@
 # Production stack for Coolify (ADR-0009). See docs/runbooks/deploy-coolify.md.
 #
-# - Only `web` gets a domain in Coolify (container port 80). Nothing publishes a host port.
+# - Only `web` gets a domain in Coolify. Nginx listens on 8080, the port the image EXPOSEs;
+#   Traefik picks it automatically, so the domain needs no port. Nothing publishes a host port.
 # - `signer` has no domain: Laravel reaches it as http://signer:8000 on the stack network.
 # - No custom networks: Coolify attaches its own per-stack network, which Traefik also joins.
 #   (A second network made Traefik pick an IP it cannot reach: 502.)
@@ -59,13 +60,8 @@ x-laravel: &laravel
 services:
   web:
     <<: *laravel
-    # Coolify routes a compose domain to port 80. Nginx runs as non-root (www-data), so allow it
-    # to bind a low port inside this container's own network namespace only.
-    sysctls:
-      net.ipv4.ip_unprivileged_port_start: 0
     environment:
       <<: *laravel-env
-      NGINX_HTTP_PORT: "80"
       # Only the web container migrates and caches config/routes/views at start.
       AUTORUN_ENABLED: "true"
       AUTORUN_LARAVEL_MIGRATION: "true"
